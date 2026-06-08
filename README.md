@@ -6,6 +6,19 @@ Open Agent Window（OAW）为所有遵循 ACP 的 Agent（Claude Code、Codex、
 
 > 产品需求详见 [PRD.md](./PRD.md)。
 
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [PRD.md](./PRD.md) | 产品需求、功能范围与优先级 |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | 工程约定与开发流程（人类 / LLM 共用） |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 组件职责与数据流 |
+| [docs/ACP_PROTOCOL.md](./docs/ACP_PROTOCOL.md) | ACP 消息契约 |
+| [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | SQLite 数据模型 |
+| [docs/API.md](./docs/API.md) | HTTP / WebSocket 接口契约 |
+| [docs/MILESTONE_0.md](./docs/MILESTONE_0.md) | 首个垂直切片任务拆解 |
+| [packages/shared-types](./packages/shared-types) | 类型契约的权威来源 |
+
 ---
 
 ## 目录
@@ -71,8 +84,8 @@ Agent
 
 - NestJS
 - WebSocket
-- Redis（会话状态 / 缓存）
-- PostgreSQL（持久化）
+- SQLite（MVP 持久化，后续可升级 PostgreSQL）
+- Redis（可选，跨实例共享会话状态时启用）
 
 ### 基础设施（Infra）
 
@@ -109,8 +122,8 @@ Agent
 ### 环境要求
 
 - Node.js ≥ 18
-- pnpm（推荐）或 npm
-- Docker（用于本地启动 Redis / PostgreSQL）
+- pnpm
+- Docker（可选，仅在需要 Redis 时使用；MVP 用 SQLite 文件，无需额外服务）
 
 ### 安装与启动
 
@@ -118,12 +131,17 @@ Agent
 # 安装依赖
 pnpm install
 
-# 启动本地依赖服务（Redis / PostgreSQL）
-docker compose up -d
+# 准备环境变量
+cp .env.example .env
+
+# （可选）需要 Redis 时再启动
+docker compose --profile redis up -d
 
 # 启动开发环境（web / gateway / api）
 pnpm dev
 ```
+
+> MVP 使用 SQLite，数据库文件默认在 `data/oaw.db`，首次启动自动建表，无需手动安装数据库。
 
 启动后：
 
