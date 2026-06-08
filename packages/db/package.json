@@ -1,7 +1,6 @@
 {
-  "name": "@oaw/shared-types",
+  "name": "@oaw/db",
   "version": "0.1.0",
-  "description": "Shared TypeScript types and ACP protocol contracts for Open Agent Window",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -13,7 +12,12 @@
     "typecheck": "tsc --noEmit",
     "test": "echo \"No tests yet\""
   },
+  "dependencies": {
+    "@oaw/shared-types": "workspace:*",
+    "better-sqlite3": "^11.7.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "typescript": "^5.4.0"
   }
 }

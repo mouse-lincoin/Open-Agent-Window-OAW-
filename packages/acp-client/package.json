@@ -1,7 +1,6 @@
 {
-  "name": "@oaw/shared-types",
+  "name": "@oaw/acp-client",
   "version": "0.1.0",
-  "description": "Shared TypeScript types and ACP protocol contracts for Open Agent Window",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,9 +10,13 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "echo \"No tests yet\""
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@oaw/shared-types": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.8"
   }
 }
