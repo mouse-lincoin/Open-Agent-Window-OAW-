@@ -53,9 +53,10 @@ OAW 的核心运行时，详见 [ACP_PROTOCOL.md](./ACP_PROTOCOL.md)。
 
 ### 2.3 API（业务服务）
 
-- Workspace / Session / Permission / Message 的 CRUD。
-- 通过 `packages/*` 中的 `diff-engine`、`permission-engine` 复用核心逻辑。
-- 直接访问 SQLite。
+- 基于 **Fastify** 的 HTTP REST 服务（`apps/api`）。
+- Workspace / Session / Message / Diff 的 CRUD 与文件树查询。
+- 通过 `@oaw/db` 访问 SQLite；文件路径校验复用 `@oaw/diff-engine` 的 path-safe 工具。
+- 权限决策与 Agent 交互在 **Gateway** 侧完成（`permission-engine` 不由 API 直接依赖）。
 
 ### 2.4 存储
 
@@ -113,10 +114,11 @@ apps/api ─────────────┘
 
 apps/gateway ──▶ packages/acp-client        （ACP 协议编解码）
 apps/gateway ──▶ packages/agent-registry    （Agent 定义与发现）
+apps/gateway ──▶ packages/db                  （会话落库）
 apps/gateway ──▶ packages/permission-engine （授权决策）
 apps/gateway ──▶ packages/diff-engine       （Diff 生成与应用）
-apps/api     ──▶ packages/diff-engine
-apps/api     ──▶ packages/permission-engine
+apps/api     ──▶ packages/db
+apps/api     ──▶ packages/diff-engine       （文件树路径安全）
 ```
 
 `packages/shared-types` 是所有组件的契约源头，不依赖任何其他包。
@@ -142,5 +144,5 @@ apps/api     ──▶ packages/permission-engine
 | 数据库 | PostgreSQL | SQLite 本地文件 |
 | 会话状态 | Redis | 进程内内存 |
 | 部署 | Kubernetes | 单进程 / docker-compose |
-| 多 Agent | 全量支持 | 先支持 1 个（Claude Code 或 mock） |
+| 多 Agent | 全量支持 | mock + Claude Code / Codex / Gemini CLI / Cursor CLI |
 | 协作 | 多人共享 | 单用户单 Workspace |

@@ -78,20 +78,19 @@ Agent
 - TypeScript
 - Monaco Editor（代码与 Diff 展示）
 - Zustand（状态管理）
-- TanStack Query（数据请求与缓存）
+- 原生 `fetch` + WebSocket 客户端（`apps/web/src/lib/api.ts`、`ws-client.ts`）
 
 ### 后端（Backend）
 
-- NestJS
-- WebSocket
+- **API**：Fastify + `@oaw/db`（SQLite）+ `@oaw/diff-engine`（文件树路径安全）
+- **Gateway**：Node.js + `ws`（WebSocket 与 Agent stdio 转发）
 - SQLite（MVP 持久化，后续可升级 PostgreSQL）
 - Redis（可选，跨实例共享会话状态时启用）
 
 ### 基础设施（Infra）
 
-- Docker
-- Kubernetes
-- Nginx
+- 本地开发：`pnpm dev` 一键启动三应用
+- Docker / Kubernetes / Nginx（后续生产部署，MVP 未强制依赖）
 
 ---
 
@@ -104,12 +103,13 @@ Agent
 ├── apps/
 │   ├── web/        # 前端应用（Next.js）
 │   ├── gateway/    # ACP 网关与 Agent 进程管理
-│   └── api/        # 业务 API（NestJS）
+│   └── api/        # 业务 API（Fastify + SQLite）
 └── packages/
     ├── acp-client/         # ACP 协议客户端实现
     ├── agent-registry/     # Agent 注册与发现
-    ├── diff-engine/        # Diff 生成与应用
-    ├── permission-engine/  # 权限校验与授权管理
+    ├── db/                 # SQLite 访问层
+    ├── diff-engine/        # Diff 生成与应用、路径安全
+    ├── permission-engine/  # 权限校验（Gateway 使用）
     └── shared-types/       # 跨包共享的类型定义
 ```
 
