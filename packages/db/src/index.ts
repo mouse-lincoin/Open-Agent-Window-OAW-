@@ -114,6 +114,13 @@ export class OawDatabase {
     return rows.map(rowToSession);
   }
 
+  updateSessionTitle(id: string, title: string): Session | null {
+    this.db
+      .prepare(`UPDATE sessions SET title = ? WHERE id = ? AND (title IS NULL OR title = '')`)
+      .run(title, id);
+    return this.getSession(id);
+  }
+
   endSession(id: string, _reason = 'ended'): Session | null {
     const now = Date.now();
     this.db
@@ -383,6 +390,8 @@ export function resolveDatabasePath(databaseUrl: string): string {
 }
 
 /** 将 DATABASE_URL 解析为绝对路径（Monorepo 内 apps/* 共用 data/oaw.db）。 */
+export { deriveSessionTitle } from './session-title.js';
+
 export function resolveDefaultDatabasePath(metaUrl: string): string {
   const url = process.env.DATABASE_URL ?? 'file:./data/oaw.db';
   const relative = resolveDatabasePath(url);

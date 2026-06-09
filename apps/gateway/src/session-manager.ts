@@ -1,11 +1,12 @@
 import { createEnvelope, encodeEnvelope } from '@oaw/acp-client';
 import {
-  ClaudeCodeAdapter,
+  configureStdioAcpAgent,
   createAgent,
-  isSelfManagedAgent,
+  isStdioAcpAgent,
   MockAgentAdapter,
 } from '@oaw/agent-registry';
 import type { OawDatabase } from '@oaw/db';
+import { deriveSessionTitle } from '@oaw/db';
 import { applyDiff, readWorkspaceFile } from '@oaw/diff-engine';
 import {
   checkPermission,
@@ -123,12 +124,10 @@ export class SessionManager {
     workspace: Workspace,
   ): Promise<ActiveSession> {
     const agent = createAgent(session.agentId);
-    if (agent instanceof ClaudeCodeAdapter) {
-      agent.configure({
-        workspaceRoot: workspace.rootPath,
-        oawSessionId: session.id,
-      });
-    }
+    configureStdioAcpAgent(agent, {
+      workspaceRoot: workspace.rootPath,
+      oawSessionId: session.id,
+    });
     await agent.start();
     agent.onMessage((message) => {
       void this.handleAgentMessage(ws, message, session.id);
@@ -189,6 +188,10 @@ export class SessionManager {
     }
 
     const prompt = raw.payload as { text: string };
+    const session = this.db.getSession(sessionId);
+    if (session && !session.title) {
+      this.db.updateSessionTitle(sessionId, deriveSessionTitle(prompt.text));
+    }
     this.db.createMessage({ sessionId, role: 'user', content: prompt.text });
 
     const agentMessage = this.db.createMessage({
@@ -278,7 +281,7 @@ export class SessionManager {
       const payload = message.payload as PermissionRequestPayload;
       this.permissionRequestScopes.set(payload.requestId, payload.scope);
 
-      if (active && isSelfManagedAgent(active.agent)) {
+      if (active && isStdioAcpAgent(active.agent)) {
         await this.persistAgentEvent(sessionId, message);
         this.send(ws, { ...message, sessionId });
         return;
@@ -436,7 +439,7 @@ export class SessionManager {
     const sessionId = raw.sessionId;
     if (!sessionId) return;
     const active = this.sessions.get(sessionId);
-    if (!active || !isSelfManagedAgent(active.agent)) return;
+    if (!active || !isStdioAcpAgent(active.agent)) return;
     active.agent.send(raw);
   }
 

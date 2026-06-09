@@ -184,10 +184,14 @@ export function WorkspaceApp() {
 
   const handleSend = (text: string) => {
     if (!sessionId || !wsRef.current) return;
+    const isFirstMessage = useChatStore.getState().messages.length === 0;
     addUserMessage(text);
     wsRef.current.sendRaw(
       createEnvelope('session/prompt', { text }, { sessionId }),
     );
+    if (isFirstMessage && workspaceId) {
+      window.setTimeout(() => void refreshSessions(workspaceId), 400);
+    }
   };
 
   const handlePermission = (decision: 'allow_once' | 'allow_session' | 'reject') => {
