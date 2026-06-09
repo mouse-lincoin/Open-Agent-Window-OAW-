@@ -112,15 +112,7 @@ export function pickPermissionOption(
   );
 }
 
-export function toRelativeWorkspacePath(workspaceRoot: string, absolutePath: string): string {
-  const root = workspaceRoot.replace(/\/$/, '');
-  const path = absolutePath.replace(/\/$/, '');
-  if (path === root) return '';
-  if (path.startsWith(`${root}/`)) {
-    return path.slice(root.length + 1);
-  }
-  throw new Error(`Path outside workspace: ${absolutePath}`);
-}
+export { toRelativeWorkspacePath } from '@oaw/diff-engine';
 
 export function extractTextDelta(notification: SessionNotification): string | null {
   const update = notification.update;

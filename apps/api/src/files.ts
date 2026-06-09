@@ -1,66 +1,57 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import type { FileNode } from '@oaw/shared-types';
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { assertWithinWorkspaceRoot, resolveWithinWorkspace } from '@oaw/diff-engine';
 
-export async function buildFileTree(rootPath: string): Promise<FileNode[]> {
-  return buildTree(rootPath, rootPath, 0);
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileTreeNode[];
 }
 
-async function buildTree(
+export async function buildFileTree(
   rootPath: string,
-  currentPath: string,
-  depth: number,
-): Promise<FileNode[]> {
-  if (depth > 6) return [];
+  relativePath = '',
+  maxDepth = 4,
+): Promise<FileTreeNode[]> {
+  const fullPath = resolveWithinWorkspace(rootPath, relativePath);
+  assertWithinWorkspaceRoot(rootPath, fullPath);
 
-  const entries = await readdir(currentPath, { withFileTypes: true });
-  const nodes: FileNode[] = [];
+  const entries = await readdir(fullPath, { withFileTypes: true });
+  const nodes: FileTreeNode[] = [];
 
   for (const entry of entries) {
-    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-
-    const fullPath = join(currentPath, entry.name);
-    const relativePath = fullPath.slice(rootPath.length + 1);
-
-    if (entry.isDirectory()) {
-      const children = await buildTree(rootPath, fullPath, depth + 1);
-      nodes.push({
-        type: 'dir',
-        name: entry.name,
-        path: relativePath,
-        children,
-      });
-    } else if (entry.isFile()) {
-      nodes.push({ type: 'file', name: entry.name, path: relativePath });
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+      continue;
     }
+
+    const entryRelativePath = relativePath ? join(relativePath, entry.name) : entry.name;
+    const node: FileTreeNode = {
+      name: entry.name,
+      path: entryRelativePath.replace(/\\/g, '/'),
+      type: entry.isDirectory() ? 'directory' : 'file',
+    };
+
+    if (entry.isDirectory() && maxDepth > 0) {
+      node.children = await buildFileTree(rootPath, entryRelativePath, maxDepth - 1);
+    }
+
+    nodes.push(node);
   }
 
-  nodes.sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+  return nodes.sort((a, b) => {
+    if (a.type !== b.type) {
+      return a.type === 'directory' ? -1 : 1;
+    }
     return a.name.localeCompare(b.name);
   });
-
-  return nodes;
 }
 
 export async function readWorkspaceFileContent(
   rootPath: string,
   relativePath: string,
 ): Promise<string> {
-  const fullPath = resolve(rootPath, relativePath);
-  const root = resolve(rootPath);
-  if (!fullPath.startsWith(root)) {
-    throw new Error('Path escapes workspace root');
-  }
+  const fullPath = resolveWithinWorkspace(rootPath, relativePath);
+  assertWithinWorkspaceRoot(rootPath, fullPath);
   return readFile(fullPath, 'utf8');
-}
-
-export async function pathExists(rootPath: string, relativePath: string): Promise<boolean> {
-  try {
-    const fullPath = resolve(rootPath, relativePath);
-    await stat(fullPath);
-    return true;
-  } catch {
-    return false;
-  }
 }

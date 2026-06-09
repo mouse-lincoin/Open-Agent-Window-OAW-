@@ -1,6 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import type { DiffPayload } from '@oaw/shared-types';
+import { assertWithinWorkspaceRoot, resolveWithinWorkspace } from './path-safe.js';
+
+export { assertWithinWorkspaceRoot, resolveWithinWorkspace, toRelativeWorkspacePath } from './path-safe.js';
 
 export interface DiffInput {
   path: string;
@@ -9,10 +12,7 @@ export interface DiffInput {
   toolCallId?: string;
 }
 
-export function createDiffPayload(
-  diffId: string,
-  input: DiffInput,
-): DiffPayload {
+export function createDiffPayload(diffId: string, input: DiffInput): DiffPayload {
   return {
     diffId,
     path: input.path,
@@ -26,11 +26,7 @@ export async function readWorkspaceFile(
   workspaceRoot: string,
   relativePath: string,
 ): Promise<string> {
-  const fullPath = resolve(workspaceRoot, relativePath);
-  const root = resolve(workspaceRoot);
-  if (!fullPath.startsWith(root)) {
-    throw new Error('Path escapes workspace root');
-  }
+  const fullPath = resolveWithinWorkspace(workspaceRoot, relativePath);
   try {
     return await readFile(fullPath, 'utf8');
   } catch (err) {
@@ -45,22 +41,13 @@ export async function applyDiff(
   workspaceRoot: string,
   diff: Pick<DiffPayload, 'path' | 'after'>,
 ): Promise<void> {
-  const fullPath = resolve(workspaceRoot, diff.path);
-  const root = resolve(workspaceRoot);
-  if (!fullPath.startsWith(root)) {
-    throw new Error('Path escapes workspace root');
-  }
+  const fullPath = resolveWithinWorkspace(workspaceRoot, diff.path);
   await mkdir(dirname(fullPath), { recursive: true });
   await writeFile(fullPath, diff.after, 'utf8');
 }
 
 export function resolveWorkspacePath(workspaceRoot: string, relativePath: string): string {
-  const fullPath = resolve(workspaceRoot, relativePath);
-  const root = resolve(workspaceRoot);
-  if (!fullPath.startsWith(root)) {
-    throw new Error('Path escapes workspace root');
-  }
-  return fullPath;
+  return resolveWithinWorkspace(workspaceRoot, relativePath);
 }
 
 export async function buildEditFileDiff(
@@ -80,4 +67,16 @@ export async function buildEditFileDiff(
       toolCallId,
     }),
   };
+}
+
+export function buildUnifiedDiff(before: string, after: string, filePath: string): string {
+  const beforeLines = before.split('\n');
+  const afterLines = after.split('\n');
+  const header = [
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    `@@ -1,${beforeLines.length} +1,${afterLines.length} @@`,
+  ];
+  const body = afterLines.map((line) => `+${line}`);
+  return [...header, ...body].join('\n');
 }

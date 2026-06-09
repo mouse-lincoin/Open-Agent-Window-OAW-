@@ -13,6 +13,7 @@
     "@fastify/cors": "^10.0.1",
     "@oaw/agent-registry": "workspace:*",
     "@oaw/db": "workspace:*",
+    "@oaw/diff-engine": "workspace:*",
     "@oaw/shared-types": "workspace:*",
     "fastify": "^5.2.0"
   },

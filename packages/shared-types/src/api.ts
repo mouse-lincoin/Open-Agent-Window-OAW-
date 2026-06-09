@@ -4,7 +4,7 @@
  */
 
 import type { AgentCapabilities } from './protocol.js';
-import type { Message, Session, ToolCall, Workspace } from './entities.js';
+import type { Diff, Message, Session, ToolCall, Workspace } from './entities.js';
 
 // ---------- Workspace ----------
 
@@ -34,6 +34,7 @@ export interface MessageWithToolCalls extends Message {
 
 export interface SessionMessagesResponse {
   messages: MessageWithToolCalls[];
+  diffs: Diff[];
 }
 
 export interface WorkspaceSessionsResponse {
