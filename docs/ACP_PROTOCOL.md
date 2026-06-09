@@ -50,6 +50,8 @@ interface Envelope<T = unknown> {
 | `permission/response` | C→G | 用户授权决策 | `PermissionResponsePayload` |
 | `diff` | G→C | 推送一个待审查 Diff | `DiffPayload` |
 | `diff/decision` | C→G | Accept / Reject | `DiffDecisionPayload` |
+| `ping` | C→G | 应用层心跳探测 | `{}` |
+| `pong` | G→C | 心跳响应 | `{}` |
 | `error` | G→C | 错误 | `ErrorPayload` |
 
 > C = Client(浏览器)，G = Gateway。
@@ -206,8 +208,10 @@ G → C  session/update     { kind: 'done', messageId }
 
 ## 5. 约定与规则
 
-1. 除 `initialize` / `initialized` 外，所有消息必须携带有效 `sessionId`。
+1. 除 `initialize` / `initialized` / `ping` / `pong` 外，所有消息必须携带有效 `sessionId`。
 2. Gateway 收到非法或未知 `type` 时回 `error`（`INVALID_MESSAGE`），不断开连接。
-3. `permission/request` 未在超时时间内得到响应，按 `reject` 处理（默认 60s，可配置）。
-4. 同一 `diffId` 的 `diff/decision` 只接受一次，重复忽略。
+3. `permission/request` 未在超时时间内得到响应，按 `reject` 处理（默认 60s，可配置）。同一 `requestId` 的授权记录只落库一次（去重）。
+4. 同一 `diffId` 的 `diff/decision` 只接受一次，重复忽略。Diff 决策仅凭 `sessionId` + 数据库即可处理，不依赖 Gateway 内存中的活跃会话。
 5. 所有 `id` / `*Id` 字段统一用 UUID v4。
+6. **心跳**：服务端每 30s 发送 WebSocket 协议级 ping（浏览器自动 pong）。由于浏览器无法主动发送协议级 ping，客户端额外使用应用层 `ping`/`pong` 探测半开连接：发出 `ping` 后若在超时内未收到 `pong`，则主动断开并重连。
+7. **单活跃会话**：同一个 WebSocket 连接同时只保留一个活跃 Agent 进程。当连接挂载/激活一个会话时，该连接上其它会话的 Agent 进程会被停止（DB 会话状态保持 `active`，可后续恢复），以避免 Agent 子进程堆积。
