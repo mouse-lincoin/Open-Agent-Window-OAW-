@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createEnvelope } from '@oaw/acp-client';
-import type { FileNode, Workspace } from '@oaw/shared-types';
+import type { AgentInfo, FileNode, Workspace } from '@oaw/shared-types';
 import { api } from '@/lib/api';
 import { WsClient } from '@/lib/ws-client';
 import { useChatStore } from '@/store/chat-store';
@@ -16,6 +16,8 @@ export function WorkspaceApp() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [ready, setReady] = useState(false);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState('mock-agent');
   const wsRef = useRef<WsClient | null>(null);
 
   const sessionId = useChatStore((s) => s.sessionId);
@@ -36,6 +38,14 @@ export function WorkspaceApp() {
 
   useEffect(() => {
     void refreshWorkspaces();
+    void api.listAgents().then((res) => {
+      setAgents(res.agents);
+      if (res.agents.length > 0) {
+        setSelectedAgentId((current) =>
+          res.agents.some((agent) => agent.id === current) ? current : res.agents[0]!.id,
+        );
+      }
+    });
   }, [refreshWorkspaces]);
 
   useEffect(() => {
@@ -107,7 +117,7 @@ export function WorkspaceApp() {
     if (!workspaceId || !wsRef.current) return;
     reset();
     wsRef.current.sendRaw(
-      createEnvelope('session/new', { workspaceId, agentId: 'mock-agent' }),
+      createEnvelope('session/new', { workspaceId, agentId: selectedAgentId }),
     );
   };
 
@@ -169,9 +179,34 @@ export function WorkspaceApp() {
         </ul>
         {workspaceId && (
           <>
-            <button type="button" onClick={handleNewSession} disabled={!ready} style={{ margin: 8 }}>
-              新建会话
-            </button>
+            <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ fontSize: 12, color: '#999' }}>
+                Agent
+                <select
+                  value={selectedAgentId}
+                  onChange={(e) => setSelectedAgentId(e.target.value)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    marginTop: 4,
+                    padding: '6px 8px',
+                    background: '#1a1a1a',
+                    color: '#eee',
+                    border: '1px solid #444',
+                    borderRadius: 6,
+                  }}
+                >
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" onClick={handleNewSession} disabled={!ready}>
+                新建会话
+              </button>
+            </div>
             <FileTree tree={fileTree} />
           </>
         )}

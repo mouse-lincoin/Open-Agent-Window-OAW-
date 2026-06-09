@@ -13,7 +13,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.42.0",
+    "@agentclientprotocol/sdk": "^0.17.0",
     "@oaw/acp-client": "workspace:*",
+    "@oaw/diff-engine": "workspace:*",
     "@oaw/shared-types": "workspace:*"
   },
   "devDependencies": {

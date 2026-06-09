@@ -1,5 +1,10 @@
 import { createEnvelope, encodeEnvelope } from '@oaw/acp-client';
-import { createAgent, MockAgentAdapter } from '@oaw/agent-registry';
+import {
+  ClaudeCodeAdapter,
+  createAgent,
+  isSelfManagedAgent,
+  MockAgentAdapter,
+} from '@oaw/agent-registry';
 import type { OawDatabase } from '@oaw/db';
 import { applyDiff, readWorkspaceFile } from '@oaw/diff-engine';
 import {
@@ -36,6 +41,7 @@ interface ActiveSession {
 export class SessionManager {
   private sessions = new Map<string, ActiveSession>();
   private pendingPermissions = new Map<string, PendingPermission>();
+  private permissionRequestScopes = new Map<string, PermissionRequestPayload['scope']>();
   private readonly permissionTimeoutMs: number;
 
   constructor(
@@ -61,9 +67,11 @@ export class SessionManager {
         break;
       case 'permission/response':
         await this.handlePermissionResponse(raw);
+        this.forwardToSessionAgent(raw);
         break;
       case 'diff/decision':
         await this.handleDiffDecision(raw);
+        this.forwardToSessionAgent(raw);
         break;
       default:
         this.sendError(ws, raw.sessionId, 'INVALID_MESSAGE', `Unsupported type: ${raw.type}`);
@@ -100,6 +108,12 @@ export class SessionManager {
     });
 
     const agent = createAgent(payload.agentId);
+    if (agent instanceof ClaudeCodeAdapter) {
+      agent.configure({
+        workspaceRoot: workspace.rootPath,
+        oawSessionId: session.id,
+      });
+    }
     await agent.start();
     agent.onMessage((message) => {
       void this.handleAgentMessage(ws, message, session.id);
@@ -120,6 +134,14 @@ export class SessionManager {
       agentText: '',
       decidedDiffs: new Set(),
     });
+
+    agent.send(
+      createEnvelope(
+        'session/new',
+        { workspaceId: payload.workspaceId, agentId: payload.agentId },
+        { sessionId: session.id },
+      ),
+    );
 
     this.send(
       ws,
@@ -169,6 +191,18 @@ export class SessionManager {
 
   private async handlePermissionResponse(raw: Envelope): Promise<void> {
     const payload = raw.payload as PermissionResponsePayload;
+    const sessionId = raw.sessionId;
+    const scope = this.permissionRequestScopes.get(payload.requestId);
+
+    if (sessionId && scope) {
+      this.db.createPermissionGrant({
+        sessionId,
+        scope,
+        decision: payload.decision,
+      });
+      this.permissionRequestScopes.delete(payload.requestId);
+    }
+
     const pending = this.pendingPermissions.get(payload.requestId);
     if (!pending) return;
 
@@ -209,7 +243,18 @@ export class SessionManager {
     message: Envelope,
     sessionId: string,
   ): Promise<void> {
+    const active = this.sessions.get(sessionId);
+
     if (message.type === 'permission/request') {
+      const payload = message.payload as PermissionRequestPayload;
+      this.permissionRequestScopes.set(payload.requestId, payload.scope);
+
+      if (active && isSelfManagedAgent(active.agent)) {
+        await this.persistAgentEvent(sessionId, message);
+        this.send(ws, { ...message, sessionId });
+        return;
+      }
+
       const allowed = await this.interceptPermission(ws, sessionId, message);
       if (!allowed) return;
       await this.continueAfterPermission(sessionId, message);
@@ -356,6 +401,14 @@ export class SessionManager {
     if (ws.readyState === ws.OPEN) {
       ws.send(encodeEnvelope(envelope));
     }
+  }
+
+  private forwardToSessionAgent(raw: Envelope): void {
+    const sessionId = raw.sessionId;
+    if (!sessionId) return;
+    const active = this.sessions.get(sessionId);
+    if (!active || !isSelfManagedAgent(active.agent)) return;
+    active.agent.send(raw);
   }
 
   private sendError(

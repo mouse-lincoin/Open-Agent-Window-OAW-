@@ -1,5 +1,5 @@
-import type { AgentAdapter } from '@oaw/shared-types';
-import type { AgentInfo } from '@oaw/shared-types';
+import type { AgentAdapter, AgentInfo } from '@oaw/shared-types';
+import { ClaudeCodeAdapter } from './claude-code.js';
 import { MockAgentAdapter } from './mock-agent.js';
 
 export type AgentFactory = () => AgentAdapter;
@@ -35,6 +35,20 @@ export function registerBuiltinAgents(): void {
       capabilities: {
         streaming: true,
         tools: ['edit_file'],
+        diff: true,
+      },
+    },
+  );
+
+  registerAgent(
+    'claude-code',
+    () => new ClaudeCodeAdapter(),
+    {
+      id: 'claude-code',
+      name: 'Claude Code',
+      capabilities: {
+        streaming: true,
+        tools: ['read_file', 'edit_file', 'run_command', 'search'],
         diff: true,
       },
     },
