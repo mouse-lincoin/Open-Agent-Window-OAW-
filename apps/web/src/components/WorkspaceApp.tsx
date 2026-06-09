@@ -7,12 +7,15 @@ import { filterFileTree } from '@/lib/file-tree-utils';
 import { api } from '@/lib/api';
 import { WsClient } from '@/lib/ws-client';
 import { useChatStore } from '@/store/chat-store';
+import type { WsConnectionState } from '@/lib/ws-client';
 import { ChatPanel } from './ChatPanel';
+import { ConnectionStatus } from './ConnectionStatus';
 import { DiffViewer } from './DiffViewer';
 import { FileTree } from './FileTree';
 import { FileViewer } from './FileViewer';
 import { PermissionDialog } from './PermissionDialog';
 import { SessionList } from './SessionList';
+import { Toast } from './Toast';
 import { ToolTimeline } from './ToolTimeline';
 
 export function WorkspaceApp() {
@@ -25,9 +28,15 @@ export function WorkspaceApp() {
   const [fileContent, setFileContent] = useState('');
   const [fileLoading, setFileLoading] = useState(false);
   const [ready, setReady] = useState(false);
+  const [connectionState, setConnectionState] = useState<WsConnectionState>('disconnected');
+  const [toast, setToast] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('mock-agent');
   const wsRef = useRef<WsClient | null>(null);
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+  }, []);
 
   const sessionId = useChatStore((s) => s.sessionId);
   const pendingPermission = useChatStore((s) => s.pendingPermission);
@@ -64,16 +73,29 @@ export function WorkspaceApp() {
   }, []);
 
   useEffect(() => {
-    void refreshWorkspaces();
-    void api.listAgents().then((res) => {
-      setAgents(res.agents);
-      if (res.agents.length > 0) {
-        setSelectedAgentId((current) =>
-          res.agents.some((agent) => agent.id === current) ? current : res.agents[0]!.id,
-        );
-      }
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    void refreshWorkspaces().catch((err) => {
+      showToast(err instanceof Error ? err.message : '加载 Workspace 失败');
     });
-  }, [refreshWorkspaces]);
+    void api
+      .listAgents()
+      .then((res) => {
+        setAgents(res.agents);
+        if (res.agents.length > 0) {
+          setSelectedAgentId((current) =>
+            res.agents.some((agent) => agent.id === current) ? current : res.agents[0]!.id,
+          );
+        }
+      })
+      .catch((err) => {
+        showToast(err instanceof Error ? err.message : '加载 Agent 列表失败');
+      });
+  }, [refreshWorkspaces, showToast]);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -125,7 +147,7 @@ export function WorkspaceApp() {
           if (payload.code === 'PERMISSION_DENIED') {
             setPendingPermission(null);
           }
-          console.error(payload.message);
+          showToast(payload.message);
           break;
         }
         default:
@@ -136,17 +158,27 @@ export function WorkspaceApp() {
     const unsubscribeReconnect = ws.onReconnect(() => {
       const currentSessionId = useChatStore.getState().sessionId;
       if (currentSessionId) {
-        void api.getMessages(currentSessionId).then(({ messages, diffs }) => {
-          loadHistory(messages, diffs);
-        });
+        void api
+          .getMessages(currentSessionId)
+          .then(({ messages, diffs }) => {
+            loadHistory(messages, diffs);
+          })
+          .catch((err) => {
+            showToast(err instanceof Error ? err.message : '重连后同步历史失败');
+          });
       }
     });
 
-    void ws.connect().catch(console.error);
+    const unsubscribeState = ws.onConnectionStateChange(setConnectionState);
+
+    void ws.connect().catch((err) => {
+      showToast(err instanceof Error ? err.message : 'WebSocket 连接失败');
+    });
 
     return () => {
       unsubscribe();
       unsubscribeReconnect();
+      unsubscribeState();
       ws.close();
     };
   }, [
@@ -156,6 +188,7 @@ export function WorkspaceApp() {
     setPendingDiff,
     setPendingPermission,
     setSessionId,
+    showToast,
     upsertToolCall,
     workspaceId,
     refreshSessions,
@@ -171,13 +204,58 @@ export function WorkspaceApp() {
       .finally(() => setFileLoading(false));
   }, [workspaceId, selectedFilePath, pendingDiff]);
 
+  const endCurrentSession = () => {
+    const currentSessionId = useChatStore.getState().sessionId;
+    if (currentSessionId && wsRef.current) {
+      wsRef.current.sendRaw(
+        createEnvelope('session/end', {}, { sessionId: currentSessionId }),
+      );
+    }
+  };
+
   const handleCreateWorkspace = async () => {
     const name = prompt('Workspace 名称', 'demo');
     const rootPath = prompt('本地目录绝对路径', '/workspace');
     if (!name || !rootPath) return;
-    const ws = await api.createWorkspace({ name, rootPath });
-    await refreshWorkspaces();
-    setWorkspaceId(ws.id);
+    try {
+      const ws = await api.createWorkspace({ name, rootPath });
+      await refreshWorkspaces();
+      setWorkspaceId(ws.id);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '创建 Workspace 失败');
+    }
+  };
+
+  const handleDeleteWorkspace = async (id: string, name: string) => {
+    if (!window.confirm(`删除 Workspace「${name}」？相关会话与消息将一并删除。`)) return;
+    try {
+      if (workspaceId === id) {
+        endCurrentSession();
+        reset();
+        setWorkspaceId(null);
+        setSelectedFilePath(null);
+        setSessions([]);
+        setFileTree([]);
+      }
+      await api.deleteWorkspace(id);
+      await refreshWorkspaces();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '删除 Workspace 失败');
+    }
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    if (!window.confirm('删除该会话？')) return;
+    try {
+      if (sessionId === id) {
+        endCurrentSession();
+        reset();
+      }
+      await api.deleteSession(id);
+      if (workspaceId) await refreshSessions(workspaceId);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '删除会话失败');
+    }
   };
 
   const handleNewSession = () => {
@@ -192,8 +270,12 @@ export function WorkspaceApp() {
   const handleSelectSession = async (id: string) => {
     setSessionId(id);
     setSelectedFilePath(null);
-    const { messages, diffs } = await api.getMessages(id);
-    loadHistory(messages, diffs);
+    try {
+      const { messages, diffs } = await api.getMessages(id);
+      loadHistory(messages, diffs);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '加载会话历史失败');
+    }
   };
 
   const handleSend = (text: string) => {
@@ -240,14 +322,17 @@ export function WorkspaceApp() {
     <div style={styles.layout}>
       <aside style={styles.sidebar}>
         <header style={styles.sidebarHeader}>
-          <h2 style={{ margin: 0, fontSize: 16 }}>OAW</h2>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 16 }}>OAW</h2>
+            <ConnectionStatus state={connectionState} />
+          </div>
           <button type="button" onClick={() => void handleCreateWorkspace()}>
             + Workspace
           </button>
         </header>
         <ul style={styles.workspaceList}>
           {workspaces.map((w) => (
-            <li key={w.id}>
+            <li key={w.id} style={styles.workspaceRow}>
               <button
                 type="button"
                 style={{
@@ -255,18 +340,21 @@ export function WorkspaceApp() {
                   ...(workspaceId === w.id ? styles.workspaceActive : {}),
                 }}
                 onClick={() => {
-                  const currentSessionId = useChatStore.getState().sessionId;
-                  if (currentSessionId && wsRef.current) {
-                    wsRef.current.sendRaw(
-                      createEnvelope('session/end', {}, { sessionId: currentSessionId }),
-                    );
-                  }
+                  endCurrentSession();
                   setWorkspaceId(w.id);
                   reset();
                   setSelectedFilePath(null);
                 }}
               >
                 {w.name}
+              </button>
+              <button
+                type="button"
+                style={styles.iconBtn}
+                title="删除 Workspace"
+                onClick={() => void handleDeleteWorkspace(w.id, w.name)}
+              >
+                ×
               </button>
             </li>
           ))}
@@ -297,6 +385,7 @@ export function WorkspaceApp() {
               sessions={sessions}
               activeSessionId={sessionId}
               onSelect={(id) => void handleSelectSession(id)}
+              onDelete={(id) => void handleDeleteSession(id)}
             />
             <div style={styles.sectionHeader}>文件</div>
             <FileTree
@@ -322,6 +411,7 @@ export function WorkspaceApp() {
       {pendingPermission && (
         <PermissionDialog request={pendingPermission} onDecision={handlePermission} />
       )}
+      <Toast message={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
@@ -345,8 +435,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   workspaceList: { listStyle: 'none', margin: 0, padding: 8, flexShrink: 0 },
+  workspaceRow: { display: 'flex', alignItems: 'stretch', gap: 4, marginBottom: 4 },
   workspaceBtn: {
-    width: '100%',
+    flex: 1,
     textAlign: 'left',
     padding: '8px 10px',
     background: 'transparent',
@@ -356,6 +447,17 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   workspaceActive: { background: '#2a2a2a', color: '#fff' },
+  iconBtn: {
+    width: 28,
+    flexShrink: 0,
+    background: 'transparent',
+    border: '1px solid #333',
+    borderRadius: 6,
+    color: '#888',
+    cursor: 'pointer',
+    fontSize: 16,
+    lineHeight: 1,
+  },
   section: { padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 },
   sectionHeader: {
     padding: '8px 12px 4px',

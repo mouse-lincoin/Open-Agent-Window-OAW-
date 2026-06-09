@@ -4,22 +4,28 @@ import type { Envelope } from '@oaw/shared-types';
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3002/ws';
 
 export type WsHandler = (envelope: Envelope) => void;
+export type WsConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 export class WsClient {
   private ws: WebSocket | null = null;
   private handlers = new Set<WsHandler>();
   private reconnectHandlers = new Set<() => void>();
+  private stateHandlers = new Set<(state: WsConnectionState) => void>();
   private intentionalClose = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private state: WsConnectionState = 'disconnected';
 
   connect(): Promise<void> {
+    this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+
     return new Promise((resolve, reject) => {
       this.intentionalClose = false;
       this.ws = new WebSocket(WS_URL);
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
+        this.setState('connected');
         this.send(
           createEnvelope('initialize', {
             clientName: 'open-agent-window',
@@ -30,12 +36,19 @@ export class WsClient {
         resolve();
       };
 
-      this.ws.onerror = () => reject(new Error('WebSocket connection failed'));
+      this.ws.onerror = () => {
+        if (this.state === 'connecting') {
+          reject(new Error('WebSocket connection failed'));
+        }
+      };
 
       this.ws.onclose = () => {
         this.ws = null;
         if (!this.intentionalClose) {
+          this.setState('reconnecting');
           this.scheduleReconnect();
+        } else {
+          this.setState('disconnected');
         }
       };
 
@@ -48,6 +61,15 @@ export class WsClient {
         }
       };
     });
+  }
+
+  private setState(state: WsConnectionState): void {
+    this.state = state;
+    for (const handler of this.stateHandlers) handler(state);
+  }
+
+  getConnectionState(): WsConnectionState {
+    return this.state;
   }
 
   private scheduleReconnect(): void {
@@ -78,6 +100,12 @@ export class WsClient {
     return () => this.reconnectHandlers.delete(handler);
   }
 
+  onConnectionStateChange(handler: (state: WsConnectionState) => void): () => void {
+    this.stateHandlers.add(handler);
+    handler(this.state);
+    return () => this.stateHandlers.delete(handler);
+  }
+
   send<T>(envelope: Envelope<T>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify(envelope));
@@ -95,5 +123,6 @@ export class WsClient {
     }
     this.ws?.close();
     this.ws = null;
+    this.setState('disconnected');
   }
 }

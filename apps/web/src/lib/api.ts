@@ -31,8 +31,12 @@ export const api = {
   listWorkspaces: () => request<WorkspacesResponse>('/workspaces'),
   createWorkspace: (body: CreateWorkspaceRequest) =>
     request<Workspace>('/workspaces', { method: 'POST', body: JSON.stringify(body) }),
+  deleteWorkspace: (workspaceId: string) =>
+    request<void>(`/workspaces/${workspaceId}`, { method: 'DELETE' }),
   listSessions: (workspaceId: string) =>
     request<WorkspaceSessionsResponse>(`/workspaces/${workspaceId}/sessions`),
+  deleteSession: (sessionId: string) =>
+    request<void>(`/sessions/${sessionId}`, { method: 'DELETE' }),
   getMessages: (sessionId: string) =>
     request<SessionMessagesResponse>(`/sessions/${sessionId}/messages`),
   listAgents: () => request<AgentsResponse>('/agents'),

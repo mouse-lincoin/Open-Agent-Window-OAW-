@@ -33,7 +33,8 @@ describe('SessionManager', () => {
     manager = new SessionManager(db, 60_000);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 700));
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
   });

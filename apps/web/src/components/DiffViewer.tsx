@@ -2,6 +2,7 @@
 
 import { DiffEditor } from '@monaco-editor/react';
 import type { DiffPayload } from '@oaw/shared-types';
+import { guessLanguage } from '@/lib/file-tree-utils';
 
 interface Props {
   diff: DiffPayload;
@@ -25,7 +26,7 @@ export function DiffViewer({ diff, onDecision }: Props) {
       <div style={styles.editor}>
         <DiffEditor
           height="320px"
-          language="plaintext"
+          language={guessLanguage(diff.path)}
           original={diff.before}
           modified={diff.after}
           theme="vs-dark"
