@@ -247,20 +247,22 @@ export class SessionManager {
     const sessionId = raw.sessionId;
     if (!sessionId) return;
 
-    const active = this.sessions.get(sessionId);
-    if (!active) return;
-
     const payload = raw.payload as DiffDecisionPayload;
-    if (active.decidedDiffs.has(payload.diffId)) return;
-    active.decidedDiffs.add(payload.diffId);
-
     const diff = this.db.getDiff(payload.diffId);
-    if (!diff || diff.decision !== 'pending') return;
+    if (!diff || diff.sessionId !== sessionId || diff.decision !== 'pending') return;
 
-    const workspace = this.db.getWorkspace(active.workspaceId);
+    const active = this.sessions.get(sessionId);
+    if (active?.decidedDiffs.has(payload.diffId)) return;
+    active?.decidedDiffs.add(payload.diffId);
+
+    const session = this.db.getSession(sessionId);
+    if (!session) return;
+
+    const workspace = this.db.getWorkspace(session.workspaceId);
     if (!workspace) return;
 
-    this.db.decideDiff(payload.diffId, payload.decision);
+    const decided = this.db.decideDiff(payload.diffId, payload.decision);
+    if (!decided) return;
 
     if (payload.decision === 'accept') {
       await applyDiff(workspace.rootPath, {

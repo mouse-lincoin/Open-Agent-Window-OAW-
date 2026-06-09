@@ -114,7 +114,8 @@ app.get<{ Params: { id: string } }>('/api/v1/sessions/:id/messages', async (req,
     ...message,
     toolCalls: db.listToolCallsByMessage(message.id),
   }));
-  return { messages };
+  const diffs = db.listDiffsBySession(req.params.id);
+  return { messages, diffs };
 });
 
 app.delete<{ Params: { id: string } }>('/api/v1/sessions/:id', async (req, reply) => {

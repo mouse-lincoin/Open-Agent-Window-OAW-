@@ -38,6 +38,9 @@ importers:
       '@oaw/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@oaw/diff-engine':
+        specifier: workspace:*
+        version: link:../../packages/diff-engine
       '@oaw/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

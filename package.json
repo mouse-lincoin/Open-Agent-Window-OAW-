@@ -19,7 +19,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test && node scripts/run-e2e.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

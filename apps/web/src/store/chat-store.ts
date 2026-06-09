@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  Diff,
   DiffPayload,
   MessageWithToolCalls,
   PermissionRequestPayload,
@@ -40,7 +41,7 @@ interface ChatState {
     status: ToolCall['status'];
     result?: string;
   }) => void;
-  loadHistory: (messages: MessageWithToolCalls[]) => void;
+  loadHistory: (messages: MessageWithToolCalls[], diffs?: Diff[]) => void;
   setPendingPermission: (req: PermissionRequestPayload | null) => void;
   setPendingDiff: (diff: DiffPayload | null) => void;
   reset: () => void;
@@ -84,7 +85,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : [...s.toolTimeline, entry];
       return { toolTimeline };
     }),
-  loadHistory: (messages) => {
+  loadHistory: (messages, diffs = []) => {
     const chatMessages: ChatMessage[] = messages.map((m) => ({
       id: m.id,
       role: m.role === 'user' ? 'user' : 'agent',
@@ -101,12 +102,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
         createdAt: tc.createdAt,
       })),
     );
+    const pendingDiffRecord = [...diffs].reverse().find((d) => d.decision === 'pending');
+    const pendingDiff: DiffPayload | null = pendingDiffRecord
+      ? {
+          diffId: pendingDiffRecord.id,
+          path: pendingDiffRecord.path,
+          before: pendingDiffRecord.beforeText,
+          after: pendingDiffRecord.afterText,
+          toolCallId: pendingDiffRecord.toolCallId,
+        }
+      : null;
     set({
       messages: chatMessages.filter((m) => m.role === 'user' || m.role === 'agent'),
       streamingText: '',
       toolTimeline,
       pendingPermission: null,
-      pendingDiff: null,
+      pendingDiff,
     });
   },
   setPendingPermission: (req) => set({ pendingPermission: req }),

@@ -178,8 +178,8 @@ export function WorkspaceApp() {
   const handleSelectSession = async (id: string) => {
     setSessionId(id);
     setSelectedFilePath(null);
-    const { messages } = await api.getMessages(id);
-    loadHistory(messages);
+    const { messages, diffs } = await api.getMessages(id);
+    loadHistory(messages, diffs);
   };
 
   const handleSend = (text: string) => {

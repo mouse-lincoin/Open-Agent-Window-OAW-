@@ -279,6 +279,13 @@ export class OawDatabase {
     return row ? rowToDiff(row) : null;
   }
 
+  listDiffsBySession(sessionId: string): Diff[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM diffs WHERE session_id = ? ORDER BY created_at ASC`)
+      .all(sessionId) as Record<string, unknown>[];
+    return rows.map(rowToDiff);
+  }
+
   // ---------- Permission ----------
 
   createPermissionGrant(input: {
