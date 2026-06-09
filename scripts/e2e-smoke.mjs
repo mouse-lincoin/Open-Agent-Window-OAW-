@@ -1,4 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const require = createRequire(new URL('../apps/gateway/package.json', import.meta.url));
 const { WebSocket } = require('ws');
 
@@ -6,6 +9,10 @@ const API_PORT = process.env.API_PORT ?? '3001';
 const GATEWAY_PORT = process.env.GATEWAY_PORT ?? '3002';
 const API = `http://localhost:${API_PORT}/api/v1`;
 const WS_URL = `ws://localhost:${GATEWAY_PORT}/ws`;
+
+// 使用临时工作区目录，避免 e2e 直接写入本仓库。
+const workspaceRoot = mkdtempSync(join(tmpdir(), 'oaw-e2e-'));
+writeFileSync(join(workspaceRoot, 'README.md'), '# e2e fixture\n');
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -62,7 +69,7 @@ async function main() {
   const workspace = await fetch(`${API}/workspaces`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'e2e', rootPath: '/workspace' }),
+    body: JSON.stringify({ name: 'e2e', rootPath: workspaceRoot }),
   }).then((r) => r.json());
 
   const events = [];
@@ -160,7 +167,12 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  })
+  .catch((err) => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    console.error(err);
+    process.exit(1);
+  });

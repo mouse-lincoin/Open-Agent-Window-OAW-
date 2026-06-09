@@ -14,6 +14,8 @@ const MESSAGE_TYPES: ReadonlySet<string> = new Set<MessageType>([
   'permission/response',
   'diff',
   'diff/decision',
+  'ping',
+  'pong',
   'error',
 ]);
 

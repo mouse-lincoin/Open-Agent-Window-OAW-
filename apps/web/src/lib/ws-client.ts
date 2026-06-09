@@ -1,7 +1,10 @@
 import { createEnvelope, decodeEnvelope } from '@oaw/acp-client';
+import { PROTOCOL_VERSION } from '@oaw/shared-types';
 import type { Envelope } from '@oaw/shared-types';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3002/ws';
+const HEARTBEAT_MS = 25_000;
+const PONG_TIMEOUT_MS = 10_000;
 
 export type WsHandler = (envelope: Envelope) => void;
 export type WsConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -14,6 +17,8 @@ export class WsClient {
   private intentionalClose = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private pongTimer: ReturnType<typeof setTimeout> | null = null;
   private state: WsConnectionState = 'disconnected';
 
   connect(): Promise<void> {
@@ -30,9 +35,10 @@ export class WsClient {
           createEnvelope('initialize', {
             clientName: 'open-agent-window',
             clientVersion: '0.1.0',
-            protocolVersion: '0.1',
+            protocolVersion: PROTOCOL_VERSION,
           }),
         );
+        this.startHeartbeat();
         resolve();
       };
 
@@ -43,6 +49,7 @@ export class WsClient {
       };
 
       this.ws.onclose = () => {
+        this.stopHeartbeat();
         this.ws = null;
         if (!this.intentionalClose) {
           this.setState('reconnecting');
@@ -55,12 +62,49 @@ export class WsClient {
       this.ws.onmessage = (event) => {
         try {
           const envelope = decodeEnvelope(String(event.data));
+          if (envelope.type === 'pong') {
+            this.clearPongTimer();
+            return;
+          }
           for (const handler of this.handlers) handler(envelope);
         } catch {
           // ignore malformed frames
         }
       };
     });
+  }
+
+  /**
+   * 应用层心跳：浏览器 WebSocket 无法主动发送协议级 ping 帧，因此用应用层 ping/pong
+   * 在客户端检测半开（half-open）连接——若发出 ping 后在超时内未收到 pong，则主动关闭
+   * 连接以触发自动重连。
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      this.send(createEnvelope('ping', {}));
+      this.clearPongTimer();
+      this.pongTimer = setTimeout(() => {
+        // 未在超时内收到 pong，认为连接已失效，关闭以触发重连。
+        this.ws?.close();
+      }, PONG_TIMEOUT_MS);
+    }, HEARTBEAT_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.clearPongTimer();
+  }
+
+  private clearPongTimer(): void {
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer);
+      this.pongTimer = null;
+    }
   }
 
   private setState(state: WsConnectionState): void {
@@ -117,6 +161,7 @@ export class WsClient {
 
   close(): void {
     this.intentionalClose = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { DiffPayload } from '@oaw/shared-types';
-import { assertWithinWorkspaceRoot, resolveWithinWorkspace } from './path-safe.js';
+import { resolveWithinWorkspace } from './path-safe.js';
 
 export { assertWithinWorkspaceRoot, resolveWithinWorkspace, toRelativeWorkspacePath } from './path-safe.js';
 

@@ -23,6 +23,12 @@ export interface TimelineEntry {
   createdAt: number;
 }
 
+export interface DecidedDiff {
+  diffId: string;
+  path: string;
+  decision: 'accept' | 'reject';
+}
+
 interface ChatState {
   sessionId: string | null;
   messages: ChatMessage[];
@@ -30,6 +36,7 @@ interface ChatState {
   toolTimeline: TimelineEntry[];
   pendingPermission: PermissionRequestPayload | null;
   pendingDiff: DiffPayload | null;
+  diffHistory: DecidedDiff[];
   setSessionId: (id: string | null) => void;
   addUserMessage: (content: string) => void;
   appendStream: (delta: string) => void;
@@ -44,6 +51,7 @@ interface ChatState {
   loadHistory: (messages: MessageWithToolCalls[], diffs?: Diff[]) => void;
   setPendingPermission: (req: PermissionRequestPayload | null) => void;
   setPendingDiff: (diff: DiffPayload | null) => void;
+  addDecidedDiff: (diff: DecidedDiff) => void;
   reset: () => void;
 }
 
@@ -54,6 +62,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   toolTimeline: [],
   pendingPermission: null,
   pendingDiff: null,
+  diffHistory: [],
   setSessionId: (id) => set({ sessionId: id }),
   addUserMessage: (content) =>
     set((s) => ({
@@ -112,6 +121,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           toolCallId: pendingDiffRecord.toolCallId,
         }
       : null;
+    const diffHistory: DecidedDiff[] = diffs
+      .filter((d) => d.decision === 'accept' || d.decision === 'reject')
+      .map((d) => ({
+        diffId: d.id,
+        path: d.path,
+        decision: d.decision as 'accept' | 'reject',
+      }));
     set({
       messages: chatMessages.filter(
         (m) =>
@@ -121,10 +137,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       toolTimeline,
       pendingPermission: null,
       pendingDiff,
+      diffHistory,
     });
   },
   setPendingPermission: (req) => set({ pendingPermission: req }),
   setPendingDiff: (diff) => set({ pendingDiff: diff }),
+  addDecidedDiff: (diff) =>
+    set((s) => ({
+      diffHistory: s.diffHistory.some((d) => d.diffId === diff.diffId)
+        ? s.diffHistory
+        : [...s.diffHistory, diff],
+    })),
   reset: () =>
     set({
       sessionId: null,
@@ -133,5 +156,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       toolTimeline: [],
       pendingPermission: null,
       pendingDiff: null,
+      diffHistory: [],
     }),
 }));

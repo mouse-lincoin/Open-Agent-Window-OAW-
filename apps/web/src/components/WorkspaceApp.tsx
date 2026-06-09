@@ -10,6 +10,7 @@ import { useChatStore } from '@/store/chat-store';
 import type { WsConnectionState } from '@/lib/ws-client';
 import { ChatPanel } from './ChatPanel';
 import { ConnectionStatus } from './ConnectionStatus';
+import { DiffHistory } from './DiffHistory';
 import { DiffViewer } from './DiffViewer';
 import { FileTree } from './FileTree';
 import { FileViewer } from './FileViewer';
@@ -41,6 +42,7 @@ export function WorkspaceApp() {
   const sessionId = useChatStore((s) => s.sessionId);
   const pendingPermission = useChatStore((s) => s.pendingPermission);
   const pendingDiff = useChatStore((s) => s.pendingDiff);
+  const diffHistory = useChatStore((s) => s.diffHistory);
   const toolTimeline = useChatStore((s) => s.toolTimeline);
   const setSessionId = useChatStore((s) => s.setSessionId);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
@@ -50,6 +52,7 @@ export function WorkspaceApp() {
   const loadHistory = useChatStore((s) => s.loadHistory);
   const setPendingPermission = useChatStore((s) => s.setPendingPermission);
   const setPendingDiff = useChatStore((s) => s.setPendingDiff);
+  const addDecidedDiff = useChatStore((s) => s.addDecidedDiff);
   const reset = useChatStore((s) => s.reset);
 
   const filteredTree = useMemo(
@@ -307,6 +310,7 @@ export function WorkspaceApp() {
     wsRef.current.sendRaw(
       createEnvelope('diff/decision', { diffId: pendingDiff.diffId, decision }, { sessionId }),
     );
+    addDecidedDiff({ diffId: pendingDiff.diffId, path: pendingDiff.path, decision });
     setPendingDiff(null);
     if (workspaceId) {
       void refreshFileTree(workspaceId);
@@ -403,6 +407,7 @@ export function WorkspaceApp() {
           <div style={styles.chatColumn}>
             <ChatPanel onSend={handleSend} disabled={!sessionId || !ready} />
             {pendingDiff && <DiffViewer diff={pendingDiff} onDecision={handleDiffDecision} />}
+            <DiffHistory entries={diffHistory} />
           </div>
           <FileViewer path={selectedFilePath} content={fileContent} loading={fileLoading} />
         </div>
