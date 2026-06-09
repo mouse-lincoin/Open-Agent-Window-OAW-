@@ -111,4 +111,50 @@ describe('SessionManager', () => {
     const messages = db.listMessages(sessionId);
     expect(messages.filter((m) => m.role === 'agent')).toHaveLength(0);
   });
+
+  it('replies pong to a ping without a session', async () => {
+    const ws = new MockWebSocket();
+    await manager.handleClientMessage(asWs(ws), createEnvelope('ping', {}));
+    expect(ws.sent.some((frame) => frame.includes('"type":"pong"'))).toBe(true);
+  });
+
+  it('keeps only one active session per connection (no agent leak)', async () => {
+    const root = mkdtempSync(join(tempDir, 'workspace-'));
+    const workspace = db.createWorkspace({ name: 'demo', rootPath: root });
+    const ws = new MockWebSocket();
+
+    await manager.handleClientMessage(
+      asWs(ws),
+      createEnvelope('session/new', { workspaceId: workspace.id, agentId: 'mock-agent' }),
+    );
+    await manager.handleClientMessage(
+      asWs(ws),
+      createEnvelope('session/new', { workspaceId: workspace.id, agentId: 'mock-agent' }),
+    );
+
+    expect(manager.activeSessionCount()).toBe(1);
+    // 两个会话都已落库，旧会话保留为可恢复状态。
+    expect(db.listSessionsByWorkspace(workspace.id)).toHaveLength(2);
+  });
+
+  it('persists a diff decision without an active session in memory', async () => {
+    const root = mkdtempSync(join(tempDir, 'workspace-'));
+    const workspace = db.createWorkspace({ name: 'demo', rootPath: root });
+    const session = db.createSession({ workspaceId: workspace.id, agentId: 'mock-agent' });
+    const diffId = crypto.randomUUID();
+    db.createDiff({
+      id: diffId,
+      sessionId: session.id,
+      path: 'note.txt',
+      beforeText: '',
+      afterText: 'hello world',
+    });
+
+    await manager.handleClientMessage(
+      asWs(new MockWebSocket()),
+      createEnvelope('diff/decision', { diffId, decision: 'accept' }, { sessionId: session.id }),
+    );
+
+    expect(db.getDiff(diffId)?.decision).toBe('accept');
+  });
 });

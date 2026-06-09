@@ -49,6 +49,7 @@ export class SessionManager {
   private pendingPermissions = new Map<string, PendingPermission>();
   private stdioPermissionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private permissionRequestScopes = new Map<string, PermissionRequestPayload['scope']>();
+  private recordedGrantRequestIds = new Set<string>();
   private readonly permissionTimeoutMs: number;
 
   constructor(
@@ -56,6 +57,11 @@ export class SessionManager {
     permissionTimeoutMs = 60_000,
   ) {
     this.permissionTimeoutMs = permissionTimeoutMs;
+  }
+
+  /** 当前内存中保持活跃 Agent 的会话数（用于监控/测试）。 */
+  activeSessionCount(): number {
+    return this.sessions.size;
   }
 
   registerConnection(ws: WebSocket): void {
@@ -78,6 +84,9 @@ export class SessionManager {
     this.registerConnection(ws);
 
     switch (raw.type) {
+      case 'ping':
+        this.send(ws, createEnvelope('pong', {}));
+        break;
       case 'initialize':
         await this.handleInitialize(ws, raw);
         break;
@@ -186,6 +195,7 @@ export class SessionManager {
     };
     this.sessions.set(session.id, active);
     this.trackSessionOnConnection(ws, session.id);
+    await this.enforceSingleActiveSession(ws, session.id);
 
     agent.send(
       createEnvelope(
@@ -206,6 +216,7 @@ export class SessionManager {
     if (existing) {
       existing.ws = ws;
       this.trackSessionOnConnection(ws, sessionId);
+      await this.enforceSingleActiveSession(ws, sessionId);
       return existing;
     }
 
@@ -275,13 +286,31 @@ export class SessionManager {
     }
 
     if (sessionId && scope) {
-      this.db.createPermissionGrant({
+      this.recordPermissionGrant(payload.requestId, {
         sessionId,
         scope,
         decision: payload.decision,
       });
       this.permissionRequestScopes.delete(payload.requestId);
     }
+  }
+
+  /**
+   * 按 requestId 去重写入授权记录，避免「超时拒绝 + 迟到的用户响应」或重复响应
+   * 在 permission_grants 中产生重复行。
+   */
+  private recordPermissionGrant(
+    requestId: string,
+    input: {
+      sessionId: string;
+      scope: PermissionRequestPayload['scope'];
+      decision: PermissionResponsePayload['decision'];
+      detail?: string;
+    },
+  ): void {
+    if (this.recordedGrantRequestIds.has(requestId)) return;
+    this.recordedGrantRequestIds.add(requestId);
+    this.db.createPermissionGrant(input);
   }
 
   private async handleDiffDecision(raw: Envelope): Promise<void> {
@@ -404,7 +433,7 @@ export class SessionManager {
       });
     });
 
-    this.db.createPermissionGrant({
+    this.recordPermissionGrant(requestId, {
       sessionId,
       scope: payload.scope,
       decision,
@@ -524,6 +553,20 @@ export class SessionManager {
   private trackSessionOnConnection(ws: WebSocket, sessionId: string): void {
     this.registerConnection(ws);
     this.connectionSessions.get(ws)!.add(sessionId);
+  }
+
+  /**
+   * 保证同一个浏览器连接同时只有一个活跃 Agent：当一个会话被挂载/激活时，
+   * 停止该连接上其它会话的 Agent 进程（仅停进程，DB 会话状态保持 active 以便后续恢复），
+   * 避免切换/新建会话造成 Agent 子进程堆积泄漏。
+   */
+  private async enforceSingleActiveSession(ws: WebSocket, keepSessionId: string): Promise<void> {
+    const sessionIds = this.connectionSessions.get(ws);
+    if (!sessionIds) return;
+    const others = [...sessionIds].filter((id) => id !== keepSessionId);
+    for (const id of others) {
+      await this.detachSession(id);
+    }
   }
 
   private async detachSession(sessionId: string): Promise<void> {
