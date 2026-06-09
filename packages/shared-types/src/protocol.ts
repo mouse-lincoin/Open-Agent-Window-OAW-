@@ -3,6 +3,9 @@
  * 与 docs/ACP_PROTOCOL.md 保持一致，是浏览器 ↔ Gateway ↔ Agent 三方的权威定义。
  */
 
+/** 当前 OAW 采用的 ACP 子集版本。 */
+export const PROTOCOL_VERSION = '0.1';
+
 export type MessageType =
   | 'initialize'
   | 'initialized'
@@ -17,6 +20,8 @@ export type MessageType =
   | 'permission/response'
   | 'diff'
   | 'diff/decision'
+  | 'ping'
+  | 'pong'
   | 'error';
 
 /** 浏览器与 Gateway 之间所有消息的统一信封。 */
