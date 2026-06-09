@@ -113,7 +113,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       : null;
     set({
-      messages: chatMessages.filter((m) => m.role === 'user' || m.role === 'agent'),
+      messages: chatMessages.filter(
+        (m) =>
+          m.role === 'user' || (m.role === 'agent' && m.content.trim().length > 0),
+      ),
       streamingText: '',
       toolTimeline,
       pendingPermission: null,

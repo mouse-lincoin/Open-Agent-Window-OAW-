@@ -10,4 +10,9 @@ export {
   resolveSpawnConfig,
 } from './stdio-acp-agent.js';
 export type { StdioAcpAdapterOptions, StdioAcpSpawnConfig } from './stdio-acp-agent.js';
-export { createAgent, listAgents, registerAgent, registerBuiltinAgents } from './registry.js';
+export {
+  createAgent,
+  listAgents,
+  registerAgent,
+  registerBuiltinAgents,
+} from './registry.js';
