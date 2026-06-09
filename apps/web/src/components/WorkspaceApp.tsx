@@ -121,7 +121,10 @@ export function WorkspaceApp() {
           setPendingDiff(envelope.payload as Parameters<typeof setPendingDiff>[0]);
           break;
         case 'error': {
-          const payload = envelope.payload as { message: string };
+          const payload = envelope.payload as { code?: string; message: string };
+          if (payload.code === 'PERMISSION_DENIED') {
+            setPendingPermission(null);
+          }
           console.error(payload.message);
           break;
         }
@@ -130,15 +133,26 @@ export function WorkspaceApp() {
       }
     });
 
+    const unsubscribeReconnect = ws.onReconnect(() => {
+      const currentSessionId = useChatStore.getState().sessionId;
+      if (currentSessionId) {
+        void api.getMessages(currentSessionId).then(({ messages, diffs }) => {
+          loadHistory(messages, diffs);
+        });
+      }
+    });
+
     void ws.connect().catch(console.error);
 
     return () => {
       unsubscribe();
+      unsubscribeReconnect();
       ws.close();
     };
   }, [
     appendStream,
     finalizeStream,
+    loadHistory,
     setPendingDiff,
     setPendingPermission,
     setSessionId,
@@ -241,6 +255,12 @@ export function WorkspaceApp() {
                   ...(workspaceId === w.id ? styles.workspaceActive : {}),
                 }}
                 onClick={() => {
+                  const currentSessionId = useChatStore.getState().sessionId;
+                  if (currentSessionId && wsRef.current) {
+                    wsRef.current.sendRaw(
+                      createEnvelope('session/end', {}, { sessionId: currentSessionId }),
+                    );
+                  }
                   setWorkspaceId(w.id);
                   reset();
                   setSelectedFilePath(null);

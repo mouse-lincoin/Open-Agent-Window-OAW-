@@ -3,6 +3,7 @@ import {
   configureStdioAcpAgent,
   createAgent,
   isStdioAcpAgent,
+  listAgents,
   MockAgentAdapter,
 } from '@oaw/agent-registry';
 import type { OawDatabase } from '@oaw/db';
@@ -36,6 +37,7 @@ interface ActiveSession {
   workspaceId: string;
   agentId: string;
   agent: ReturnType<typeof createAgent>;
+  ws: WebSocket;
   agentMessageId: string | null;
   agentText: string;
   decidedDiffs: Set<string>;
@@ -43,7 +45,9 @@ interface ActiveSession {
 
 export class SessionManager {
   private sessions = new Map<string, ActiveSession>();
+  private connectionSessions = new Map<WebSocket, Set<string>>();
   private pendingPermissions = new Map<string, PendingPermission>();
+  private stdioPermissionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private permissionRequestScopes = new Map<string, PermissionRequestPayload['scope']>();
   private readonly permissionTimeoutMs: number;
 
@@ -54,7 +58,25 @@ export class SessionManager {
     this.permissionTimeoutMs = permissionTimeoutMs;
   }
 
+  registerConnection(ws: WebSocket): void {
+    if (!this.connectionSessions.has(ws)) {
+      this.connectionSessions.set(ws, new Set());
+    }
+  }
+
+  async handleConnectionClosed(ws: WebSocket): Promise<void> {
+    const sessionIds = this.connectionSessions.get(ws);
+    if (sessionIds) {
+      for (const sessionId of sessionIds) {
+        await this.detachSession(sessionId);
+      }
+      this.connectionSessions.delete(ws);
+    }
+  }
+
   async handleClientMessage(ws: WebSocket, raw: Envelope): Promise<void> {
+    this.registerConnection(ws);
+
     switch (raw.type) {
       case 'initialize':
         await this.handleInitialize(ws, raw);
@@ -69,7 +91,7 @@ export class SessionManager {
         await this.handleSessionEnd(ws, raw);
         break;
       case 'permission/response':
-        await this.handlePermissionResponse(raw);
+        await this.handlePermissionResponse(ws, raw);
         this.forwardToSessionAgent(raw);
         break;
       case 'diff/decision':
@@ -105,12 +127,31 @@ export class SessionManager {
       return;
     }
 
-    const session = this.db.createSession({
-      workspaceId: payload.workspaceId,
-      agentId: payload.agentId,
-    });
+    const knownAgent = listAgents().some((agent) => agent.id === payload.agentId);
+    if (!knownAgent) {
+      this.sendError(ws, undefined, 'INVALID_MESSAGE', `Unknown agent: ${payload.agentId}`);
+      return;
+    }
 
-    await this.attachAgentToSession(ws, session, workspace);
+    let session: Session | undefined;
+    try {
+      session = this.db.createSession({
+        workspaceId: payload.workspaceId,
+        agentId: payload.agentId,
+      });
+      await this.attachAgentToSession(ws, session, workspace);
+    } catch (err) {
+      if (session) {
+        this.db.deleteSession(session.id);
+      }
+      this.sendError(
+        ws,
+        undefined,
+        'INVALID_MESSAGE',
+        err instanceof Error ? err.message : 'failed to start agent',
+      );
+      return;
+    }
 
     this.send(
       ws,
@@ -130,13 +171,7 @@ export class SessionManager {
     });
     await agent.start();
     agent.onMessage((message) => {
-      void this.handleAgentMessage(ws, message, session.id);
-    });
-
-    const agentMessage = this.db.createMessage({
-      sessionId: session.id,
-      role: 'agent',
-      content: '',
+      void this.handleAgentMessage(session.id, message);
     });
 
     const active: ActiveSession = {
@@ -144,11 +179,13 @@ export class SessionManager {
       workspaceId: session.workspaceId,
       agentId: session.agentId,
       agent,
-      agentMessageId: agentMessage.id,
+      ws,
+      agentMessageId: null,
       agentText: '',
       decidedDiffs: new Set(),
     };
     this.sessions.set(session.id, active);
+    this.trackSessionOnConnection(ws, session.id);
 
     agent.send(
       createEnvelope(
@@ -166,7 +203,11 @@ export class SessionManager {
     sessionId: string,
   ): Promise<ActiveSession | null> {
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      existing.ws = ws;
+      this.trackSessionOnConnection(ws, sessionId);
+      return existing;
+    }
 
     const session = this.db.getSession(sessionId);
     if (!session || session.status !== 'active') return null;
@@ -209,11 +250,7 @@ export class SessionManager {
     const sessionId = raw.sessionId;
     if (!sessionId) return;
 
-    const active = this.sessions.get(sessionId);
-    if (active) {
-      await active.agent.stop();
-      this.sessions.delete(sessionId);
-    }
+    await this.detachSession(sessionId);
     this.db.endSession(sessionId);
     this.send(
       ws,
@@ -221,10 +258,21 @@ export class SessionManager {
     );
   }
 
-  private async handlePermissionResponse(raw: Envelope): Promise<void> {
+  private async handlePermissionResponse(ws: WebSocket, raw: Envelope): Promise<void> {
     const payload = raw.payload as PermissionResponsePayload;
     const sessionId = raw.sessionId;
     const scope = this.permissionRequestScopes.get(payload.requestId);
+
+    this.clearStdioPermissionTimer(payload.requestId);
+
+    const pending = this.pendingPermissions.get(payload.requestId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingPermissions.delete(payload.requestId);
+      this.permissionRequestScopes.delete(payload.requestId);
+      pending.resolve(payload.decision);
+      return;
+    }
 
     if (sessionId && scope) {
       this.db.createPermissionGrant({
@@ -234,13 +282,6 @@ export class SessionManager {
       });
       this.permissionRequestScopes.delete(payload.requestId);
     }
-
-    const pending = this.pendingPermissions.get(payload.requestId);
-    if (!pending) return;
-
-    clearTimeout(pending.timer);
-    this.pendingPermissions.delete(payload.requestId);
-    pending.resolve(payload.decision);
   }
 
   private async handleDiffDecision(raw: Envelope): Promise<void> {
@@ -272,20 +313,32 @@ export class SessionManager {
     }
   }
 
-  private async handleAgentMessage(
-    ws: WebSocket,
-    message: Envelope,
-    sessionId: string,
-  ): Promise<void> {
+  private async handleAgentMessage(sessionId: string, message: Envelope): Promise<void> {
     const active = this.sessions.get(sessionId);
+    if (!active) return;
+
+    const ws = active.ws;
 
     if (message.type === 'permission/request') {
       const payload = message.payload as PermissionRequestPayload;
       this.permissionRequestScopes.set(payload.requestId, payload.scope);
 
-      if (active && isStdioAcpAgent(active.agent)) {
+      if (isStdioAcpAgent(active.agent)) {
+        const grants = this.db.listPermissionGrants(sessionId);
+        if (checkPermission(grants, payload.scope).allowed) {
+          active.agent.send(
+            createEnvelope(
+              'permission/response',
+              { requestId: payload.requestId, decision: 'allow_session' },
+              { sessionId },
+            ),
+          );
+          return;
+        }
+
         await this.persistAgentEvent(sessionId, message);
         this.send(ws, { ...message, sessionId });
+        this.scheduleStdioPermissionTimeout(ws, sessionId, payload.requestId);
         return;
       }
 
@@ -339,6 +392,7 @@ export class SessionManager {
     const decision = await new Promise<PermissionResponsePayload['decision']>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingPermissions.delete(requestId);
+        this.permissionRequestScopes.delete(requestId);
         resolve('reject');
       }, this.permissionTimeoutMs);
 
@@ -358,11 +412,47 @@ export class SessionManager {
     });
 
     if (!isAllowDecision(decision)) {
-      this.sendError(ws, sessionId, 'PERMISSION_DENIED', 'Permission rejected');
+      const active = this.sessions.get(sessionId);
+      if (active?.agent instanceof MockAgentAdapter) {
+        active.agent.cancelPendingEdit();
+      }
+      this.sendError(ws, sessionId, 'PERMISSION_DENIED', 'Permission rejected or timed out');
       return false;
     }
 
     return true;
+  }
+
+  private scheduleStdioPermissionTimeout(
+    ws: WebSocket,
+    sessionId: string,
+    requestId: string,
+  ): void {
+    this.clearStdioPermissionTimer(requestId);
+
+    const timer = setTimeout(() => {
+      this.stdioPermissionTimers.delete(requestId);
+      this.permissionRequestScopes.delete(requestId);
+
+      const active = this.sessions.get(sessionId);
+      if (active && isStdioAcpAgent(active.agent)) {
+        active.agent.send(
+          createEnvelope('permission/response', { requestId, decision: 'reject' }, { sessionId }),
+        );
+      }
+
+      this.sendError(ws, sessionId, 'PERMISSION_DENIED', 'Permission timed out');
+    }, this.permissionTimeoutMs);
+
+    this.stdioPermissionTimers.set(requestId, timer);
+  }
+
+  private clearStdioPermissionTimer(requestId: string): void {
+    const timer = this.stdioPermissionTimers.get(requestId);
+    if (timer) {
+      clearTimeout(timer);
+      this.stdioPermissionTimers.delete(requestId);
+    }
   }
 
   private async continueAfterPermission(
@@ -427,6 +517,26 @@ export class SessionManager {
           beforeText: diff.before,
           afterText: diff.after,
         });
+      }
+    }
+  }
+
+  private trackSessionOnConnection(ws: WebSocket, sessionId: string): void {
+    this.registerConnection(ws);
+    this.connectionSessions.get(ws)!.add(sessionId);
+  }
+
+  private async detachSession(sessionId: string): Promise<void> {
+    const active = this.sessions.get(sessionId);
+    if (!active) return;
+
+    await active.agent.stop();
+    this.sessions.delete(sessionId);
+
+    for (const [ws, sessionIds] of this.connectionSessions) {
+      sessionIds.delete(sessionId);
+      if (sessionIds.size === 0) {
+        this.connectionSessions.delete(ws);
       }
     }
   }

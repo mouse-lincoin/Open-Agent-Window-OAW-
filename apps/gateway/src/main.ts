@@ -14,6 +14,7 @@ const db = new OawDatabase(databasePath);
 const port = Number(process.env.GATEWAY_PORT ?? 3002);
 const wsPath = process.env.WS_PATH ?? '/ws';
 const permissionTimeoutMs = Number(process.env.PERMISSION_TIMEOUT_MS ?? 60_000);
+const heartbeatMs = Number(process.env.WS_HEARTBEAT_MS ?? 30_000);
 
 const sessionManager = new SessionManager(db, permissionTimeoutMs);
 
@@ -25,6 +26,14 @@ const server = createServer((_req, res) => {
 const wss = new WebSocketServer({ server, path: wsPath });
 
 wss.on('connection', (ws) => {
+  sessionManager.registerConnection(ws);
+
+  const heartbeat = setInterval(() => {
+    if (ws.readyState === ws.OPEN) {
+      ws.ping();
+    }
+  }, heartbeatMs);
+
   ws.on('message', (data) => {
     void (async () => {
       try {
@@ -41,6 +50,11 @@ wss.on('connection', (ws) => {
         );
       }
     })();
+  });
+
+  ws.on('close', () => {
+    clearInterval(heartbeat);
+    void sessionManager.handleConnectionClosed(ws);
   });
 
   ws.on('error', () => {

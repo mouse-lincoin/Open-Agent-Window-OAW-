@@ -137,6 +137,11 @@ export class MockAgentAdapter implements AgentAdapter {
     requestId: string;
   } | null = null;
 
+  /** Gateway 在权限被拒绝或超时后清理挂起的编辑 */
+  cancelPendingEdit(): void {
+    this.pendingEdit = null;
+  }
+
   /** Gateway 在 permission/response allow 后调用 */
   async completePendingEdit(afterContent: string): Promise<void> {
     const pending = this.pendingEdit;
