@@ -18,6 +18,8 @@ import type {
   Envelope,
   PermissionRequestPayload,
   PermissionResponsePayload,
+  Session,
+  Workspace,
 } from '@oaw/shared-types';
 import type { WebSocket } from 'ws';
 
@@ -107,7 +109,20 @@ export class SessionManager {
       agentId: payload.agentId,
     });
 
-    const agent = createAgent(payload.agentId);
+    await this.attachAgentToSession(ws, session, workspace);
+
+    this.send(
+      ws,
+      createEnvelope('session/created', { sessionId: session.id }, { sessionId: session.id }),
+    );
+  }
+
+  private async attachAgentToSession(
+    ws: WebSocket,
+    session: Session,
+    workspace: Workspace,
+  ): Promise<ActiveSession> {
+    const agent = createAgent(session.agentId);
     if (agent instanceof ClaudeCodeAdapter) {
       agent.configure({
         workspaceRoot: workspace.rootPath,
@@ -125,37 +140,51 @@ export class SessionManager {
       content: '',
     });
 
-    this.sessions.set(session.id, {
+    const active: ActiveSession = {
       sessionId: session.id,
-      workspaceId: payload.workspaceId,
-      agentId: payload.agentId,
+      workspaceId: session.workspaceId,
+      agentId: session.agentId,
       agent,
       agentMessageId: agentMessage.id,
       agentText: '',
       decidedDiffs: new Set(),
-    });
+    };
+    this.sessions.set(session.id, active);
 
     agent.send(
       createEnvelope(
         'session/new',
-        { workspaceId: payload.workspaceId, agentId: payload.agentId },
+        { workspaceId: session.workspaceId, agentId: session.agentId },
         { sessionId: session.id },
       ),
     );
 
-    this.send(
-      ws,
-      createEnvelope('session/created', { sessionId: session.id }, { sessionId: session.id }),
-    );
+    return active;
+  }
+
+  private async ensureActiveSession(
+    ws: WebSocket,
+    sessionId: string,
+  ): Promise<ActiveSession | null> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) return existing;
+
+    const session = this.db.getSession(sessionId);
+    if (!session || session.status !== 'active') return null;
+
+    const workspace = this.db.getWorkspace(session.workspaceId);
+    if (!workspace) return null;
+
+    return this.attachAgentToSession(ws, session, workspace);
   }
 
   private async handleSessionPrompt(ws: WebSocket, raw: Envelope): Promise<void> {
     const sessionId = raw.sessionId;
     if (!sessionId) return;
 
-    const active = this.sessions.get(sessionId);
+    const active = await this.ensureActiveSession(ws, sessionId);
     if (!active) {
-      this.sendError(ws, sessionId, 'SESSION_NOT_FOUND', 'session not active');
+      this.sendError(ws, sessionId, 'SESSION_NOT_FOUND', 'session not found or ended');
       return;
     }
 

@@ -1,6 +1,7 @@
 import type {
   AgentsResponse,
   CreateWorkspaceRequest,
+  FileContentResponse,
   FileTreeResponse,
   SessionMessagesResponse,
   Workspace,
@@ -37,4 +38,8 @@ export const api = {
   listAgents: () => request<AgentsResponse>('/agents'),
   getFileTree: (workspaceId: string) =>
     request<FileTreeResponse>(`/workspaces/${workspaceId}/files`),
+  getFileContent: (workspaceId: string, path: string) =>
+    request<FileContentResponse>(
+      `/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`,
+    ),
 };
