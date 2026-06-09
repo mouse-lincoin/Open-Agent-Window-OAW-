@@ -1,20 +1,29 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createEnvelope } from '@oaw/acp-client';
-import type { AgentInfo, FileNode, Workspace } from '@oaw/shared-types';
+import type { AgentInfo, FileNode, Session, Workspace } from '@oaw/shared-types';
+import { filterFileTree } from '@/lib/file-tree-utils';
 import { api } from '@/lib/api';
 import { WsClient } from '@/lib/ws-client';
 import { useChatStore } from '@/store/chat-store';
 import { ChatPanel } from './ChatPanel';
 import { DiffViewer } from './DiffViewer';
 import { FileTree } from './FileTree';
+import { FileViewer } from './FileViewer';
 import { PermissionDialog } from './PermissionDialog';
+import { SessionList } from './SessionList';
+import { ToolTimeline } from './ToolTimeline';
 
 export function WorkspaceApp() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
+  const [fileSearch, setFileSearch] = useState('');
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState('');
+  const [fileLoading, setFileLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('mock-agent');
@@ -23,17 +32,35 @@ export function WorkspaceApp() {
   const sessionId = useChatStore((s) => s.sessionId);
   const pendingPermission = useChatStore((s) => s.pendingPermission);
   const pendingDiff = useChatStore((s) => s.pendingDiff);
+  const toolTimeline = useChatStore((s) => s.toolTimeline);
   const setSessionId = useChatStore((s) => s.setSessionId);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
   const appendStream = useChatStore((s) => s.appendStream);
   const finalizeStream = useChatStore((s) => s.finalizeStream);
+  const upsertToolCall = useChatStore((s) => s.upsertToolCall);
+  const loadHistory = useChatStore((s) => s.loadHistory);
   const setPendingPermission = useChatStore((s) => s.setPendingPermission);
   const setPendingDiff = useChatStore((s) => s.setPendingDiff);
   const reset = useChatStore((s) => s.reset);
 
+  const filteredTree = useMemo(
+    () => filterFileTree(fileTree, fileSearch),
+    [fileTree, fileSearch],
+  );
+
   const refreshWorkspaces = useCallback(async () => {
     const { workspaces: list } = await api.listWorkspaces();
     setWorkspaces(list);
+  }, []);
+
+  const refreshSessions = useCallback(async (wsId: string) => {
+    const { sessions: list } = await api.listSessions(wsId);
+    setSessions(list);
+  }, []);
+
+  const refreshFileTree = useCallback(async (wsId: string) => {
+    const { tree } = await api.getFileTree(wsId);
+    setFileTree(tree);
   }, []);
 
   useEffect(() => {
@@ -49,6 +76,12 @@ export function WorkspaceApp() {
   }, [refreshWorkspaces]);
 
   useEffect(() => {
+    if (!workspaceId) return;
+    void refreshSessions(workspaceId);
+    void refreshFileTree(workspaceId);
+  }, [workspaceId, refreshSessions, refreshFileTree]);
+
+  useEffect(() => {
     const ws = new WsClient();
     wsRef.current = ws;
 
@@ -60,12 +93,24 @@ export function WorkspaceApp() {
         case 'session/created': {
           const payload = envelope.payload as { sessionId: string };
           setSessionId(payload.sessionId);
+          if (workspaceId) void refreshSessions(workspaceId);
           break;
         }
         case 'session/update': {
           const payload = envelope.payload as { kind: string; delta?: string };
           if (payload.kind === 'text' && payload.delta) appendStream(payload.delta);
           if (payload.kind === 'done') finalizeStream();
+          break;
+        }
+        case 'tool/call': {
+          const payload = envelope.payload as {
+            toolCallId: string;
+            tool: 'read_file' | 'edit_file' | 'run_command' | 'search';
+            input: Record<string, unknown>;
+            status: 'pending' | 'running' | 'success' | 'error';
+            result?: string;
+          };
+          upsertToolCall(payload);
           break;
         }
         case 'permission/request':
@@ -97,12 +142,20 @@ export function WorkspaceApp() {
     setPendingDiff,
     setPendingPermission,
     setSessionId,
+    upsertToolCall,
+    workspaceId,
+    refreshSessions,
   ]);
 
   useEffect(() => {
-    if (!workspaceId) return;
-    void api.getFileTree(workspaceId).then((res) => setFileTree(res.tree));
-  }, [workspaceId, pendingDiff]);
+    if (!workspaceId || !selectedFilePath) return;
+    setFileLoading(true);
+    void api
+      .getFileContent(workspaceId, selectedFilePath)
+      .then((res) => setFileContent(res.content))
+      .catch(() => setFileContent(''))
+      .finally(() => setFileLoading(false));
+  }, [workspaceId, selectedFilePath, pendingDiff]);
 
   const handleCreateWorkspace = async () => {
     const name = prompt('Workspace 名称', 'demo');
@@ -116,17 +169,29 @@ export function WorkspaceApp() {
   const handleNewSession = () => {
     if (!workspaceId || !wsRef.current) return;
     reset();
+    setSelectedFilePath(null);
     wsRef.current.sendRaw(
       createEnvelope('session/new', { workspaceId, agentId: selectedAgentId }),
     );
   };
 
+  const handleSelectSession = async (id: string) => {
+    setSessionId(id);
+    setSelectedFilePath(null);
+    const { messages } = await api.getMessages(id);
+    loadHistory(messages);
+  };
+
   const handleSend = (text: string) => {
     if (!sessionId || !wsRef.current) return;
+    const isFirstMessage = useChatStore.getState().messages.length === 0;
     addUserMessage(text);
     wsRef.current.sendRaw(
       createEnvelope('session/prompt', { text }, { sessionId }),
     );
+    if (isFirstMessage && workspaceId) {
+      window.setTimeout(() => void refreshSessions(workspaceId), 400);
+    }
   };
 
   const handlePermission = (decision: 'allow_once' | 'allow_session' | 'reject') => {
@@ -148,7 +213,12 @@ export function WorkspaceApp() {
     );
     setPendingDiff(null);
     if (workspaceId) {
-      void api.getFileTree(workspaceId).then((res) => setFileTree(res.tree));
+      void refreshFileTree(workspaceId);
+      if (selectedFilePath) {
+        void api.getFileContent(workspaceId, selectedFilePath).then((res) => {
+          setFileContent(res.content);
+        });
+      }
     }
   };
 
@@ -170,7 +240,11 @@ export function WorkspaceApp() {
                   ...styles.workspaceBtn,
                   ...(workspaceId === w.id ? styles.workspaceActive : {}),
                 }}
-                onClick={() => setWorkspaceId(w.id)}
+                onClick={() => {
+                  setWorkspaceId(w.id);
+                  reset();
+                  setSelectedFilePath(null);
+                }}
               >
                 {w.name}
               </button>
@@ -179,22 +253,13 @@ export function WorkspaceApp() {
         </ul>
         {workspaceId && (
           <>
-            <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: 12, color: '#999' }}>
+            <div style={styles.section}>
+              <label style={styles.label}>
                 Agent
                 <select
                   value={selectedAgentId}
                   onChange={(e) => setSelectedAgentId(e.target.value)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    marginTop: 4,
-                    padding: '6px 8px',
-                    background: '#1a1a1a',
-                    color: '#eee',
-                    border: '1px solid #444',
-                    borderRadius: 6,
-                  }}
+                  style={styles.select}
                 >
                   {agents.map((agent) => (
                     <option key={agent.id} value={agent.id}>
@@ -207,13 +272,32 @@ export function WorkspaceApp() {
                 新建会话
               </button>
             </div>
-            <FileTree tree={fileTree} />
+            <div style={styles.sectionHeader}>历史会话</div>
+            <SessionList
+              sessions={sessions}
+              activeSessionId={sessionId}
+              onSelect={(id) => void handleSelectSession(id)}
+            />
+            <div style={styles.sectionHeader}>文件</div>
+            <FileTree
+              tree={filteredTree}
+              selectedPath={selectedFilePath}
+              searchQuery={fileSearch}
+              onSearchChange={setFileSearch}
+              onSelectFile={setSelectedFilePath}
+            />
           </>
         )}
       </aside>
       <main style={styles.main}>
-        <ChatPanel onSend={handleSend} disabled={!sessionId || !ready} />
-        {pendingDiff && <DiffViewer diff={pendingDiff} onDecision={handleDiffDecision} />}
+        <div style={styles.contentRow}>
+          <div style={styles.chatColumn}>
+            <ChatPanel onSend={handleSend} disabled={!sessionId || !ready} />
+            {pendingDiff && <DiffViewer diff={pendingDiff} onDecision={handleDiffDecision} />}
+          </div>
+          <FileViewer path={selectedFilePath} content={fileContent} loading={fileLoading} />
+        </div>
+        <ToolTimeline entries={toolTimeline} />
       </main>
       {pendingPermission && (
         <PermissionDialog request={pendingPermission} onDecision={handlePermission} />
@@ -225,11 +309,12 @@ export function WorkspaceApp() {
 const styles: Record<string, React.CSSProperties> = {
   layout: { display: 'flex', height: '100vh', background: '#0d0d0d', color: '#eee' },
   sidebar: {
-    width: 280,
+    width: 300,
     borderRight: '1px solid #333',
     display: 'flex',
     flexDirection: 'column',
     background: '#141414',
+    minHeight: 0,
   },
   sidebarHeader: {
     display: 'flex',
@@ -237,8 +322,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     padding: 12,
     borderBottom: '1px solid #333',
+    flexShrink: 0,
   },
-  workspaceList: { listStyle: 'none', margin: 0, padding: 8 },
+  workspaceList: { listStyle: 'none', margin: 0, padding: 8, flexShrink: 0 },
   workspaceBtn: {
     width: '100%',
     textAlign: 'left',
@@ -250,5 +336,27 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   workspaceActive: { background: '#2a2a2a', color: '#fff' },
+  section: { padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 },
+  sectionHeader: {
+    padding: '8px 12px 4px',
+    fontSize: 11,
+    color: '#888',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    flexShrink: 0,
+  },
+  label: { fontSize: 12, color: '#999' },
+  select: {
+    display: 'block',
+    width: '100%',
+    marginTop: 4,
+    padding: '6px 8px',
+    background: '#1a1a1a',
+    color: '#eee',
+    border: '1px solid #444',
+    borderRadius: 6,
+  },
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
+  contentRow: { flex: 1, display: 'flex', minHeight: 0 },
+  chatColumn: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: '1px solid #333' },
 };

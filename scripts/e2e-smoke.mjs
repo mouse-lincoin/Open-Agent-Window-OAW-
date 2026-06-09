@@ -76,8 +76,19 @@ async function main() {
   send('diff/decision', { diffId: diff.payload.diffId, decision: 'accept' }, sessionId);
   await sleep(300);
 
+  const sessionDetail = await fetch(`${API}/sessions/${sessionId}`).then((r) => r.json());
+  if (!sessionDetail.title) throw new Error('session title not set from first prompt');
+
   const messages = await fetch(`${API}/sessions/${sessionId}/messages`).then((r) => r.json());
   if (!messages.messages?.length) throw new Error('messages not persisted');
+
+  // 第二轮 prompt（同一会话继续对话）
+  send('session/prompt', { text: 'second turn' }, sessionId);
+  await sleep(600);
+  const messagesAfter = await fetch(`${API}/sessions/${sessionId}/messages`).then((r) => r.json());
+  if (messagesAfter.messages.length <= messages.messages.length) {
+    throw new Error('second prompt did not persist new messages');
+  }
 
   console.log('E2E smoke passed:', {
     sessionId,
